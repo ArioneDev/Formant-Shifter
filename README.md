@@ -1,16 +1,14 @@
-# Formant Shifter VST3
+# Formant Shifter
 
+![License](https://img.shields.io/badge/license-GPL-blue) ![Language](https://img.shields.io/badge/language-c++-brightgreen) [![Ask Me Anything !](https://img.shields.io/badge/Ask%20me-anything-1abc9c.svg)](https://GitHub.com/Naereen/ama) ![](https://komarev.com/ghpvc/?username=ArioneDev)
+
+![1.1.0](https://bee-reg-ab.imagency.cn/mr/6787/26/6abdb7e7525d7.png)
+
+- two modes : music / vocal
 - 2048-point FFT with 4x overlap (`pfft~ ... 2048 4`)
 - polyphonic spectral formant translation in cents
-- peak-based spectral envelope extraction using the gen~ codebox algorithm
 - adjustable peak-region width (`envelope`, 0-16; default 10)
 - dry/wet mix (0-100%; default 100%)
-- optional wet limiter
-
-The overlap-add output uses JUCE's inverse-FFT scaling exactly once. This is
-important for a fully wet signal: applying an additional `1 / FFT size` gain
-would make the processed output effectively silent.
-
 
 ## Build
 
