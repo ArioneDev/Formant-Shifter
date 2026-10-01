@@ -13,12 +13,15 @@ FormantShifterAudioProcessor::FormantShifterAudioProcessor()
         .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       parameters (*this, nullptr, "PARAMETERS", createParameterLayout())
 {
+    modeParameter = parameters.getRawParameterValue ("mode");
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout FormantShifterAudioProcessor::createParameterLayout()
 {
     using APVTS = juce::AudioProcessorValueTreeState;
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> p;
+    p.push_back (std::make_unique<juce::AudioParameterChoice> (
+        "mode", "Mode", juce::StringArray { "Music", "Vocal" }, 0));
     p.push_back (std::make_unique<juce::AudioParameterFloat> ("formantShift", "Formant Shift",
         juce::NormalisableRange<float> (minShiftCents, maxShiftCents, 1.0f), 0.0f, "ct"));
     p.push_back (std::make_unique<juce::AudioParameterFloat> ("envelope", "Envelope",
@@ -38,7 +41,9 @@ void FormantShifterAudioProcessor::prepareToPlay (double sr, int)
     envelope.assign (fftSize / 2 + 1, 0.0f);
     shiftedEnvelope.assign (fftSize / 2 + 1, 0.0f);
     frameMagnitudes.assign (fftSize / 2 + 1, 0.0f);
-    spectralEnvelope.assign (fftSize / 2 + 1, 0.0f);
+    spectralEnvelope.assign ((size_t) 2 * (size_t) (fftSize / 2 + 1), 0.0f);
+    vocalSpectrum.assign ((size_t) fftSize * 2, 0.0f);
+    vocalEnvelopeInitialized.fill (false);
     fifoIndex = outputIndex = 0;
     shiftSmoothed.reset (sr, 0.02);
     envelopeSmoothed.reset (sr, 0.02);
@@ -83,6 +88,102 @@ void FormantShifterAudioProcessor::processFrame (int channel)
         frameMagnitudes[(size_t) k] = magnitude;
     }
 
+    if (modeParameter != nullptr && modeParameter->load (std::memory_order_relaxed) > 0.5f)
+    {
+        std::copy (data, data + fftSize * 2, vocalSpectrum.begin());
+        const int maxQuefrency = fftSize / 4;
+        const float smoothingMs = juce::jmap (
+            juce::jlimit (0.0f, 16.0f, envelopeSmoothed.getCurrentValue()),
+            0.0f, 16.0f, 0.25f, 1.5f);
+        const int cutoff = juce::jlimit (4, maxQuefrency,
+            juce::roundToInt (smoothingMs * 0.001f * (float) currentSampleRate));
+
+        std::fill (data, data + fftSize * 2, 0.0f);
+        data[0] = std::log (juce::jmax (frameMagnitudes[0], 1.0e-9f));
+        data[1] = std::log (juce::jmax (frameMagnitudes[(size_t) bins - 1], 1.0e-9f));
+        for (int k = 1; k < bins - 1; ++k)
+            data[2 * k] = std::log (juce::jmax (frameMagnitudes[(size_t) k], 1.0e-9f));
+
+        // Low-quefrency liftering smooths the log spectrum into a formant envelope.
+        fft.performRealOnlyInverseTransform (data);
+        for (int q = cutoff + 1; q < fftSize - cutoff; ++q)
+            data[q] = 0.0f;
+        fft.performRealOnlyForwardTransform (data);
+
+        const size_t channelOffset = (size_t) channel * (size_t) bins;
+        const float temporalSmoothing = 1.0f - std::exp (
+            -(float) hopSize / juce::jmax (1.0f, (float) currentSampleRate * 0.02f));
+        const float ratio = std::pow (2.0f, juce::jlimit (-600.0f, 600.0f,
+            shiftSmoothed.getCurrentValue()) / 1200.0f);
+
+        for (int k = 0; k < bins; ++k)
+        {
+            const int pos = (k == 0) ? 0 : (k == bins - 1 ? 1 : 2 * k);
+            const float measuredLogEnvelope = data[pos];
+            float& smoothLogEnvelope = spectralEnvelope[channelOffset + (size_t) k];
+            if (!vocalEnvelopeInitialized[(size_t) channel])
+                smoothLogEnvelope = measuredLogEnvelope;
+            else
+                smoothLogEnvelope += temporalSmoothing * (measuredLogEnvelope - smoothLogEnvelope);
+        }
+
+        for (int k = 0; k < bins; ++k)
+        {
+            const float smoothLogEnvelope = spectralEnvelope[channelOffset + (size_t) k];
+            const float source = juce::jlimit (0.0f, (float) (bins - 1), (float) k / ratio);
+            const int lo = (int) source;
+            const int hi = juce::jmin (lo + 1, bins - 1);
+            const float fraction = source - (float) lo;
+            const float shiftedLogEnvelope = spectralEnvelope[channelOffset + (size_t) lo]
+                * (1.0f - fraction) + spectralEnvelope[channelOffset + (size_t) hi] * fraction;
+            shiftedEnvelope[(size_t) k] = std::exp (juce::jlimit (-1.38629436f, 1.38629436f,
+                shiftedLogEnvelope - smoothLogEnvelope));
+        }
+
+        float inputEnergy = 0.0f;
+        float outputEnergy = 0.0f;
+        for (int k = 0; k < bins; ++k)
+        {
+            const int pos = (k == 0) ? 0 : (k == bins - 1 ? 1 : 2 * k);
+            const float gain = shiftedEnvelope[(size_t) k];
+            if (k == 0 || k == bins - 1)
+            {
+                const float original = vocalSpectrum[(size_t) pos];
+                inputEnergy += original * original;
+                data[pos] = original * gain;
+                outputEnergy += data[pos] * data[pos];
+            }
+            else
+            {
+                const float re = vocalSpectrum[(size_t) (2 * k)];
+                const float im = vocalSpectrum[(size_t) (2 * k + 1)];
+                inputEnergy += re * re + im * im;
+                data[2 * k] = re * gain;
+                data[2 * k + 1] = im * gain;
+                outputEnergy += data[2 * k] * data[2 * k]
+                              + data[2 * k + 1] * data[2 * k + 1];
+            }
+        }
+        vocalEnvelopeInitialized[(size_t) channel] = true;
+
+        if (outputEnergy > 1.0e-18f)
+        {
+            const float levelCorrection = juce::jlimit (0.5f, 2.0f,
+                std::sqrt (inputEnergy / outputEnergy));
+            for (int k = 0; k < bins; ++k)
+            {
+                if (k == 0) data[0] *= levelCorrection;
+                else if (k == bins - 1) data[1] *= levelCorrection;
+                else
+                {
+                    data[2 * k] *= levelCorrection;
+                    data[2 * k + 1] *= levelCorrection;
+                }
+            }
+        }
+    }
+    else
+    {
     // This follows the gen~ codebox in fft-formant-shift-gen-m4l.maxpat:
     // detect one maximum in each width-sized region, interpolate those
     // maxima into an envelope, shift the envelope, then restore detail.
@@ -169,6 +270,7 @@ void FormantShifterAudioProcessor::processFrame (int channel)
             data[2 * k] *= gain;
             data[2 * k + 1] *= gain;
         }
+    }
     }
     fft.performRealOnlyInverseTransform (data);
     window.multiplyWithWindowingTable (data, fftSize);

@@ -50,12 +50,42 @@ FormantShifterAudioProcessorEditor::FormantShifterAudioProcessorEditor (
     dryWetSlider.setTextValueSuffix (" %");
 
     auto& state = processor.getParameters();
+    versionLink.setButtonText ("v1.1.0");
+    versionLink.setURL (juce::URL ("https://github.com/ArioneDev/Formant-Shifter"));
+    versionLink.setColour (juce::HyperlinkButton::textColourId, juce::Colours::black);
+    versionLink.setTooltip ("Open Formant Shifter on GitHub");
+    addAndMakeVisible (versionLink);
+
+    modeSelector.addItem ("Music", 1);
+    modeSelector.addItem ("Vocal", 2);
+    modeSelector.setColour (juce::ComboBox::backgroundColourId, juce::Colours::white);
+    modeSelector.setColour (juce::ComboBox::textColourId, juce::Colours::black);
+    modeSelector.setColour (juce::ComboBox::outlineColourId, juce::Colours::black);
+    modeLabel.setText ("MODE", juce::dontSendNotification);
+    modeLabel.setFont (juce::Font (juce::FontOptions{}.withHeight (12.0f).withStyle ("Bold")));
+    modeLabel.setJustificationType (juce::Justification::centredRight);
+    modeLabel.setColour (juce::Label::textColourId, juce::Colours::black);
+    addAndMakeVisible (modeLabel);
+    addAndMakeVisible (modeSelector);
+    modeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>
+        (state, "mode", modeSelector);
+    modeSelector.onChange = [this] { updateModeLabels(); };
     formantShiftAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>
         (state, "formantShift", formantShiftSlider);
     envelopeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>
         (state, "envelope", envelopeSlider);
     dryWetAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>
         (state, "dryWet", dryWetSlider);
+    updateModeLabels();
+}
+
+void FormantShifterAudioProcessorEditor::updateModeLabels()
+{
+    const bool vocalMode = modeSelector.getSelectedId() == 2;
+    formantShiftLabel.setText (vocalMode ? "VOICE FORMANT" : "FORMANT SHIFT",
+                               juce::dontSendNotification);
+    envelopeLabel.setText (vocalMode ? "SMOOTHNESS" : "ENVELOPE",
+                           juce::dontSendNotification);
 }
 
 void FormantShifterAudioProcessorEditor::configureSlider (
@@ -87,8 +117,6 @@ void FormantShifterAudioProcessorEditor::paint (juce::Graphics& g)
 
     g.setFont (juce::Font (juce::FontOptions{}.withHeight (24.0f)));
     g.drawText ("Formant Shifter", 44, 25, 300, 30, juce::Justification::left);
-    g.setFont (juce::Font (juce::FontOptions{}.withHeight (14.0f)));
-    g.drawText ("v1.0.1", getWidth() - 92, 30, 64, 22, juce::Justification::right);
     g.setFont (juce::Font (juce::FontOptions{}.withHeight (13.0f)));
     g.drawText ("Made By Arione", 45, 56, 220, 20, juce::Justification::left);
 }
@@ -105,4 +133,7 @@ void FormantShifterAudioProcessorEditor::resized()
     place (formantShiftSlider, formantShiftLabel, 0);
     place (envelopeSlider, envelopeLabel, 1);
     place (dryWetSlider, dryWetLabel, 2);
+    versionLink.setBounds (getWidth() - 100, 27, 78, 22);
+    modeLabel.setBounds (getWidth() - 180, 52, 58, 24);
+    modeSelector.setBounds (getWidth() - 118, 51, 96, 26);
 }

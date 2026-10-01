@@ -37,6 +37,7 @@ private:
     static constexpr int hopSize = fftSize / oversampling;
 
     juce::AudioProcessorValueTreeState parameters;
+    std::atomic<float>* modeParameter = nullptr;
     juce::dsp::FFT fft { fftOrder };
     juce::dsp::WindowingFunction<float> window { fftSize, juce::dsp::WindowingFunction<float>::hann };
     juce::AudioBuffer<float> inputFifo, outputFifo;
@@ -46,6 +47,8 @@ private:
     double currentSampleRate = 44100.0;
     std::vector<float> envelope, shiftedEnvelope;
     std::vector<float> frameMagnitudes, spectralEnvelope;
+    std::vector<float> vocalSpectrum;
+    std::array<bool, 2> vocalEnvelopeInitialized { false, false };
     juce::SmoothedValue<float> shiftSmoothed, envelopeSmoothed, mixSmoothed;
 
     void processFrame (int channel);
